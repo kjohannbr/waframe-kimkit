@@ -10,6 +10,7 @@ type Bindings = {
   KV: KVNamespace;
   JWT_SECRET: string;
   RESEND_API_KEY: string;
+  MAIL_FROM?: string; // opcional; padrão = remetente de teste do Resend (só entrega para o e-mail dono da conta)
   APP_URL: string;    // URL pública do front, com base path. Ex: https://usuario.github.io/warframe-toolkit
   APP_ORIGIN: string; // só a origem (CORS). Ex: https://usuario.github.io
   VAPID_PUBLIC_KEY: string;
@@ -74,7 +75,7 @@ app.post('/api/auth/request', async (c) => {
     method: 'POST',
     headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      from: 'Warframe Toolkit <login@seudominio.com>',
+      from: c.env.MAIL_FROM ?? 'Warframe Toolkit <onboarding@resend.dev>',
       to: email,
       subject: 'Seu link de acesso',
       html: `<p>Clique para entrar (válido por 15 min):</p><p><a href="${link}">Entrar</a></p>`,
