@@ -21,7 +21,7 @@ git push -u origin main
 ```
 
 ### 2. Cloudflare (uma vez só)
-**Atalho:** `bash scripts/setup-cloudflare.sh` faz tudo abaixo (D1, KV, schema, VAPID, secrets, `wrangler.toml` e primeiro deploy). Manualmente:
+**Atalho:** `node scripts/setup-cloudflare.mjs` faz tudo abaixo (D1, KV, schema, VAPID, secrets, `wrangler.toml` e primeiro deploy). Manualmente:
 
 ```bash
 cd apps/api
