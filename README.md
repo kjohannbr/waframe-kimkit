@@ -41,8 +41,8 @@ Faça o primeiro deploy: `npm run deploy` (anote a URL `https://warframe-api.SEU
 
 ### 3. GitHub
 - **Settings → Pages → Source:** *GitHub Actions*.
-- **Settings → Secrets and variables → Actions → Variables:** `API_URL` = URL do Worker.
-- **Secrets:** `CLOUDFLARE_API_TOKEN` (template "Edit Cloudflare Workers") e `CLOUDFLARE_ACCOUNT_ID`.
+- (Opcional) **Variables:** `API_URL` para sobrescrever a URL da API embutida no workflow do front.
+- (Opcional, deploy automático do Worker) **Secrets** `CLOUDFLARE_API_TOKEN` (template "Edit Cloudflare Workers") e `CLOUDFLARE_ACCOUNT_ID`, e a **variável** `DEPLOY_API` = `true`.
 
 A partir daí, cada `push` na `main` publica sozinho: `apps/web/**` → Pages; `apps/api/**` → Worker.
 O site fica em `https://kjohannbr.github.io/waframe-kimkit/`.

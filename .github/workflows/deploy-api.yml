@@ -8,6 +8,9 @@ on:
 
 jobs:
   deploy:
+    # Deploy automático só quando a variável de repositório DEPLOY_API for 'true'
+    # (exige os secrets CLOUDFLARE_API_TOKEN e CLOUDFLARE_ACCOUNT_ID). Manual: botão "Run workflow".
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.DEPLOY_API == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:

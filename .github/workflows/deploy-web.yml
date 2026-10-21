@@ -35,8 +35,8 @@ jobs:
         env:
           # site de projeto: https://USUARIO.github.io/NOME-DO-REPO
           BASE_PATH: /${{ github.event.repository.name }}
-          # Settings → Secrets and variables → Actions → Variables → API_URL
-          VITE_API_URL: ${{ vars.API_URL }}
+          # opcional: sobrescreva criando a variável API_URL em Settings → Secrets and variables → Actions
+          VITE_API_URL: ${{ vars.API_URL || 'https://warframe-api.kimkitwarframe.workers.dev' }}
       - run: touch build/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
