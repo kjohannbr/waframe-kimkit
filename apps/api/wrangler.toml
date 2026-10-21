@@ -5,16 +5,16 @@ compatibility_date = "2026-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "warframe-db"
-database_id = "COLE_AQUI_O_ID_DO_D1"
+database_id = "c0f49000-fa2c-4811-8725-24b1eabfdc96"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "COLE_AQUI_O_ID_DO_KV"
+id = "2a242a8752df4793a897a0f99f50cba2"
 
 [vars]
 APP_URL = "https://kjohannbr.github.io/waframe-kimkit"
 APP_ORIGIN = "https://kjohannbr.github.io"
-VAPID_PUBLIC_KEY = "COLE_AQUI_A_CHAVE_PUBLICA_VAPID"
+VAPID_PUBLIC_KEY = "BCeFrIRAxFQ5kt5cmfFT6CxuWkTz7Q27sojrS7ep7M0afEDXTmioq7c0mSIhYgIBQoEB72oxGHLAZGAsMKS9cDI"
 VAPID_SUBJECT = "mailto:voce@exemplo.com"
 
 [triggers]
