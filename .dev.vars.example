@@ -1,0 +1,7 @@
+JWT_SECRET=troque-por-uma-string-longa-e-aleatoria
+RESEND_API_KEY=re_xxx
+VAPID_PRIVATE_KEY=
+VAPID_PUBLIC_KEY=
+VAPID_SUBJECT=mailto:voce@exemplo.com
+APP_URL=http://localhost:5173
+APP_ORIGIN=http://localhost:5173

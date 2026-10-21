@@ -1,0 +1,22 @@
+name = "warframe-api"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "warframe-db"
+database_id = "COLE_AQUI_O_ID_DO_D1"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "COLE_AQUI_O_ID_DO_KV"
+
+[vars]
+APP_URL = "https://kjohannbr.github.io/waframe-kimkit"
+APP_ORIGIN = "https://kjohannbr.github.io"
+VAPID_PUBLIC_KEY = "COLE_AQUI_A_CHAVE_PUBLICA_VAPID"
+VAPID_SUBJECT = "mailto:voce@exemplo.com"
+
+[triggers]
+# seg 00:00 UTC = reset semanal | a cada 6h = sync de catálogo + checagem de modificadores
+crons = ["0 0 * * 1", "0 */6 * * *"]
