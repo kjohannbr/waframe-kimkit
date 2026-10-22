@@ -9,13 +9,13 @@
                 └──────────────┬─────────────┘
                                │ /api/*  (mesmo domínio via Pages Functions / route)
                 ┌──────────────▼─────────────┐
-                │ Worker (Hono.js)            │──▶ Resend (magic link)
+                │ Worker (Hono.js)            │──▶ (sem e-mail: login por senha)
                 │  auth · builds · catálogo   │──▶ warframestat.us / warframe-items
                 │  rivens · tasks · push      │──▶ api.warframe.market
                 └───┬──────────┬─────────────┘
                     │          │
                ┌────▼───┐  ┌───▼────┐
-               │  D1    │  │  KV    │  sessões, magic links, cache de preço, hash de catálogo
+               │  D1    │  │  KV    │  sessões, limites de tentativa, cache de preço
                └────────┘  └────────┘
         Cron Triggers: reset semanal (seg 00:00 UTC) · sync/checagem a cada 6h
 ```
@@ -34,14 +34,16 @@
 
 ## 3. Módulos
 
-### 3.1 Auth passwordless
-1. `POST /auth/request` → token aleatório, guarda **hash** no KV (TTL 15 min, uso único), envia e-mail via Resend.
-2. `POST /auth/verify` → consome token, cria/acha usuário, cria `sess:{sid}` no KV (TTL 30 d), emite JWT em cookie `HttpOnly; Secure; SameSite=Lax`.
-3. Logout/revogação = apagar `sess:{sid}`. Rate limit por e-mail e por IP (KV ou Cloudflare Rate Limiting).
+### 3.1 Autenticação (e-mail + senha)
+1. `POST /auth/register` → valida e-mail/senha (8–128), grava `password_hash` (PBKDF2-SHA256, iterações gravadas no próprio hash), devolve token. Limite de 10 cadastros/hora por IP.
+2. `POST /auth/login` → verifica a senha em tempo constante; 5 falhas/15 min por e-mail e 20 por IP (KV).
+3. Sessão = JWT Bearer + `sess:{sid}` no KV (TTL 30 d); logout/revogação apaga a chave.
+4. **Admin:** o e-mail e a senha vêm dos secrets `ADMIN_EMAIL`/`ADMIN_PASSWORD` (nunca do repositório). A conta é criada com `role='admin'` no primeiro login; esse e-mail não pode ser cadastrado como usuário comum.
+5. Rotas `/api/admin/*` exigem `role='admin'`.
 
 ### 3.2 Sincronização de dados
-- Cron a cada 6h: baixa `warframe-items` (por versão/hash — se igual ao do KV, pula), faz upsert em lotes (`db.batch`, ≤100 statements).
-- Normalização: guardar campos consultáveis em colunas (`type`, `compat_name`, `polarity`, `is_exilus`) e o restante em `data_json`.
+- **Catálogo estático:** `scripts/build-catalog.mjs` baixa o `WFCD/warframe-items`, deduplica, calcula a compatibilidade de mods de cada item e grava `apps/web/static/data/{items,mods}.json`. O workflow do Pages roda o script a cada deploy e toda segunda-feira. O front carrega os JSON uma vez e a busca roda no navegador (sem custo de Worker/D1).
+- As tabelas `items`/`mods` do D1 ficam para dados que precisem de consulta no servidor.
 - Incarnon: perks por tier 2–5 em `incarnon_perks` como **modificadores estruturados** (`stat`, `op`, `value`), pois a API raramente os entrega prontos. Provavelmente exigirá curadoria manual de um JSON no repo.
 - Rivens: disposição por arma em `riven_dispositions` (atualiza a cada rebalanceamento).
 

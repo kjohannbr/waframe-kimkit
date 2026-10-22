@@ -3,7 +3,9 @@ name: Deploy web (GitHub Pages)
 on:
   push:
     branches: [main]
-    paths: ['apps/web/**', '.github/workflows/deploy-web.yml']
+    paths: ['apps/web/**', 'scripts/build-catalog.mjs', '.github/workflows/deploy-web.yml']
+  schedule:
+    - cron: '17 6 * * 1' # toda segunda 06:17 UTC: republica com o catálogo (armas/mods) atualizado
   workflow_dispatch:
 
 permissions:
@@ -31,6 +33,9 @@ jobs:
       - uses: actions/configure-pages@v5
       - run: npm ci
       - run: npm run check
+      - run: npm test
+      # baixa o catálogo atual (warframe-items); se o download falhar, mantém o que está no repositório
+      - run: node ../../scripts/build-catalog.mjs
       - run: npm run build
         env:
           # site de projeto: https://USUARIO.github.io/NOME-DO-REPO

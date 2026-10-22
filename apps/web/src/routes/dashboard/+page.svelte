@@ -25,8 +25,8 @@
     if (!getToken()) return void goto(`${base}/`);
     try {
       const r = await api<{ period: string; tasks: Task[] }>('/api/tasks');
-      tasks = r.tasks;
-      period = r.period;
+      tasks = r.tasks ?? [];
+      period = r.period ?? '';
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         await setToken(null);

@@ -6,7 +6,6 @@ import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import readline from 'node:readline/promises';
 
 const API_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'apps', 'api');
 const TOML = join(API_DIR, 'wrangler.toml');
@@ -84,15 +83,9 @@ if (toml.includes('COLE_AQUI_A_CHAVE_PUBLICA_VAPID')) {
 step('Gerando JWT_SECRET aleatório…');
 run('npx wrangler secret put JWT_SECRET', { input: randomBytes(48).toString('base64url') });
 
-step('RESEND_API_KEY (crie em https://resend.com/api-keys)');
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-const resend = (await rl.question('Cole a chave e pressione Enter: ')).trim();
-rl.close();
-if (!resend) {
-  console.error('✖ Chave vazia. Rode o script de novo quando tiver a chave.');
-  process.exit(1);
-}
-run('npx wrangler secret put RESEND_API_KEY', { input: resend });
+step('Conta de administrador: digite o e-mail e, depois, a senha quando o wrangler pedir (a senha não aparece na tela)');
+run('npx wrangler secret put ADMIN_EMAIL');
+run('npx wrangler secret put ADMIN_PASSWORD');
 
 step('Primeiro deploy do Worker…');
 run('npx wrangler deploy');
@@ -103,5 +96,4 @@ console.log(`
   2. GitHub → Settings → Secrets and variables → Actions → Variables → API_URL = essa URL
   3. GitHub → Settings → Pages → Source: GitHub Actions
   4. git add -A && git commit -m "Config Cloudflare" && git push   (o site publica sozinho)
-  5. Trocar o remetente ("from") em apps/api/src/index.ts por um domínio verificado no Resend
 `);

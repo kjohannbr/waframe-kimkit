@@ -2,71 +2,58 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
-  import { api, getToken, setToken } from '$lib/api';
+  import { api, errorMessage, getToken, setToken } from '$lib/api';
+  import { refreshSession } from '$lib/session.svelte';
 
+  let mode = $state<'login' | 'register'>('login');
   let email = $state('');
-  let status = $state<'idle' | 'sending' | 'sent' | 'verifying' | 'error'>('idle');
-  let message = $state('');
+  let password = $state('');
+  let name = $state('');
+  let busy = $state(false);
+  let error = $state('');
 
-  onMount(async () => {
-    // O link mágico leva a "/?token=..." — troca o token de uso único por uma sessão
-    const url = new URL(location.href);
-    const magic = url.searchParams.get('token');
-    if (magic) {
-      status = 'verifying';
-      try {
-        const r = await api<{ token: string }>('/api/auth/verify', { method: 'POST', json: { token: magic } });
-        await setToken(r.token);
-        history.replaceState(null, '', `${base}/`); // tira o token da URL
-        await goto(`${base}/dashboard`);
-      } catch {
-        status = 'error';
-        message = 'Link inválido ou expirado. Peça um novo.';
-      }
-    } else if (getToken()) {
-      await goto(`${base}/dashboard`);
-    }
+  onMount(() => {
+    if (getToken()) goto(`${base}/dashboard`, { replaceState: true });
   });
 
-  async function requestLink(e: SubmitEvent) {
+  async function submit(e: SubmitEvent) {
     e.preventDefault();
-    status = 'sending';
+    busy = true;
+    error = '';
     try {
-      await api('/api/auth/request', { method: 'POST', json: { email } });
-      status = 'sent';
-    } catch {
-      status = 'error';
-      message = 'Não foi possível enviar o link agora.';
+      const body = mode === 'login' ? { email, password } : { email, password, display_name: name };
+      const r = await api<{ token: string }>(`/api/auth/${mode}`, { method: 'POST', json: body });
+      await setToken(r.token);
+      await refreshSession();
+      await goto(`${base}/dashboard`);
+    } catch (err) {
+      error = errorMessage(err);
+    } finally {
+      busy = false;
     }
   }
 </script>
 
-<section class="mx-auto max-w-md space-y-6 py-16">
-  <h1 class="text-3xl font-bold">Entrar</h1>
-  <p class="text-zinc-400">Sem senha: enviamos um link de acesso para o seu e-mail.</p>
+<section class="mx-auto max-w-md space-y-6 py-12">
+  <div class="grid grid-cols-2 rounded-xl border border-zinc-800 bg-zinc-900 p-1 text-sm">
+    <button type="button" onclick={() => { mode = 'login'; error = ''; }} class="rounded-lg py-2 {mode === 'login' ? 'bg-zinc-800 text-white' : 'text-zinc-400'}">Entrar</button>
+    <button type="button" onclick={() => { mode = 'register'; error = ''; }} class="rounded-lg py-2 {mode === 'register' ? 'bg-zinc-800 text-white' : 'text-zinc-400'}">Criar conta</button>
+  </div>
 
-  {#if status === 'verifying'}
-    <p class="text-zinc-300">Validando link…</p>
-  {:else if status === 'sent'}
-    <p class="rounded-lg border border-emerald-700 bg-emerald-950/40 p-4 text-emerald-300">
-      Link enviado para <strong>{email}</strong>. Vale por 15 minutos.
-    </p>
-  {:else}
-    <form onsubmit={requestLink} class="space-y-3">
-      <input
-        type="email"
-        required
-        bind:value={email}
-        placeholder="voce@exemplo.com"
-        class="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 outline-none focus:border-amber-400"
-      />
-      <button
-        disabled={status === 'sending'}
-        class="w-full rounded-lg bg-amber-500 px-3 py-2 font-medium text-zinc-950 hover:bg-amber-400 disabled:opacity-60"
-      >
-        {status === 'sending' ? 'Enviando…' : 'Enviar link mágico'}
-      </button>
-      {#if status === 'error'}<p class="text-sm text-red-400">{message}</p>{/if}
-    </form>
-  {/if}
+  <div>
+    <h1 class="text-3xl font-bold">{mode === 'login' ? 'Bem-vindo de volta' : 'Criar conta'}</h1>
+    <p class="mt-1 text-zinc-400">{mode === 'login' ? 'Entre com seu e-mail e senha.' : 'Salve builds e acompanhe seus resets semanais.'}</p>
+  </div>
+
+  <form onsubmit={submit} class="space-y-3">
+    {#if mode === 'register'}
+      <input bind:value={name} maxlength="60" autocomplete="nickname" placeholder="Nome de exibição (opcional)" class="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 outline-none focus:border-amber-400" />
+    {/if}
+    <input type="email" required bind:value={email} autocomplete="email" placeholder="voce@exemplo.com" class="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 outline-none focus:border-amber-400" />
+    <input type="password" required minlength="8" maxlength="128" bind:value={password} autocomplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder={mode === 'register' ? 'Senha (mínimo 8 caracteres)' : 'Senha'} class="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 outline-none focus:border-amber-400" />
+    <button disabled={busy} class="w-full rounded-lg bg-amber-500 px-3 py-2 font-medium text-zinc-950 hover:bg-amber-400 disabled:opacity-60">
+      {busy ? 'Aguarde…' : mode === 'login' ? 'Entrar' : 'Criar conta'}
+    </button>
+    {#if error}<p role="alert" class="text-sm text-red-400">{error}</p>{/if}
+  </form>
 </section>

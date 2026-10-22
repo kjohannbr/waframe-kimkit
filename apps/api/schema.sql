@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
   email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
   display_name  TEXT,
   timezone      TEXT NOT NULL DEFAULT 'America/Sao_Paulo',
+  password_hash TEXT,                              -- pbkdf2$iter$salt$hash (admin usa o secret ADMIN_PASSWORD)
+  role          TEXT NOT NULL DEFAULT 'user',      -- user | admin
   created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
   last_login_at INTEGER
 );

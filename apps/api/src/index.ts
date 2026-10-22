@@ -9,8 +9,9 @@ type Bindings = {
   DB: D1Database;
   KV: KVNamespace;
   JWT_SECRET: string;
-  RESEND_API_KEY: string;
-  MAIL_FROM?: string; // opcional; padrão = remetente de teste do Resend (só entrega para o e-mail dono da conta)
+  ADMIN_EMAIL?: string;    // secret: e-mail do administrador
+  ADMIN_PASSWORD?: string; // secret: senha do administrador (nunca vai para o repositório)
+  PBKDF2_ITER?: string;    // custo do hash de senha (padrão 100000). No plano grátis (10 ms de CPU) use um valor menor.
   APP_URL: string;    // URL pública do front, com base path. Ex: https://usuario.github.io/warframe-toolkit
   APP_ORIGIN: string; // só a origem (CORS). Ex: https://usuario.github.io
   VAPID_PUBLIC_KEY: string;
@@ -28,7 +29,6 @@ app.use('/api/*', (c, next) =>
 
 // ───────────── Helpers ─────────────
 const SESSION_TTL = 60 * 60 * 24 * 30; // 30 dias
-const MAGIC_TTL = 60 * 15; // 15 min
 
 async function sha256(s: string) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
@@ -57,55 +57,136 @@ const requireAuth = async (c: any, next: any) => {
   }
 };
 
-// ───────────── AUTH (Magic Link) ─────────────
-app.post('/api/auth/request', async (c) => {
-  const { email } = await c.req.json<{ email: string }>();
-  if (!email || !/^\S+@\S+\.\S+$/.test(email)) return c.json({ error: 'invalid_email' }, 400);
+// ───────────── SENHAS (PBKDF2-SHA256 via WebCrypto) ─────────────
+// O número de iterações vai gravado no próprio hash, então dá para aumentar o custo depois sem invalidar senhas antigas.
+const iterations = (env: Bindings) => Math.min(100_000, Math.max(1_000, Number(env.PBKDF2_ITER) || 100_000));
+const b64 = (u8: Uint8Array) => btoa(String.fromCharCode(...u8));
+const unb64 = (str: string) => Uint8Array.from(atob(str), (ch) => ch.charCodeAt(0));
 
-  // rate limit simples: 1 pedido / 60s por e-mail
-  const rl = `rl:magic:${email.toLowerCase()}`;
-  if (await c.env.KV.get(rl)) return c.json({ ok: true }); // resposta uniforme
-  await c.env.KV.put(rl, '1', { expirationTtl: 60 });
+async function pbkdf2(password: string, salt: Uint8Array, iterations: number) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, key, 256));
+}
+function safeEqual(a: Uint8Array, b: Uint8Array) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+async function hashPassword(password: string, iter: number) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  return `pbkdf2$${iter}$${b64(salt)}$${b64(await pbkdf2(password, salt, iter))}`;
+}
+async function verifyPassword(password: string, stored: string) {
+  const [scheme, iter, salt, hash] = stored.split('$');
+  if (scheme !== 'pbkdf2' || !iter || !salt || !hash) return false;
+  return safeEqual(await pbkdf2(password, unb64(salt), Number(iter)), unb64(hash));
+}
+/** Comparação em tempo constante (compara os SHA-256 das duas strings). */
+async function secretEquals(a: string, b: string) {
+  const enc = new TextEncoder();
+  const [ha, hb] = await Promise.all([crypto.subtle.digest('SHA-256', enc.encode(a)), crypto.subtle.digest('SHA-256', enc.encode(b))]);
+  return safeEqual(new Uint8Array(ha), new Uint8Array(hb));
+}
 
-  const token = crypto.randomUUID() + crypto.randomUUID();
-  await c.env.KV.put(`magic:${await sha256(token)}`, email.toLowerCase(), { expirationTtl: MAGIC_TTL });
+// ───────────── AUTH (e-mail + senha) ─────────────
+const EMAIL_RE = /^\S+@\S+\.\S+$/;
+const normEmail = (e: unknown) => String(e ?? '').trim().toLowerCase();
+const isAdminEmail = (env: Bindings, email: string) => !!env.ADMIN_EMAIL && normEmail(env.ADMIN_EMAIL) === email;
 
-  const link = `${c.env.APP_URL}/?token=${token}`; // a home do SPA troca o token por sessão
-  await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from: c.env.MAIL_FROM ?? 'Warframe Toolkit <onboarding@resend.dev>',
-      to: email,
-      subject: 'Seu link de acesso',
-      html: `<p>Clique para entrar (válido por 15 min):</p><p><a href="${link}">Entrar</a></p>`,
-    }),
-  });
-  return c.json({ ok: true });
+/** Migração preguiçosa: adiciona password_hash/role se o D1 foi criado com o schema antigo. */
+let schemaReady = false;
+async function ensureAuthSchema(db: D1Database) {
+  if (schemaReady) return;
+  const { results } = await db.prepare('PRAGMA table_info(users)').all<{ name: string }>();
+  const cols = new Set(results.map((r) => r.name));
+  if (!cols.has('password_hash')) await db.prepare('ALTER TABLE users ADD COLUMN password_hash TEXT').run();
+  if (!cols.has('role')) await db.prepare("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'").run();
+  schemaReady = true;
+}
+
+// Limite de tentativas (KV): bloqueia após `max` falhas dentro da janela
+async function isLocked(kv: KVNamespace, key: string, max: number) {
+  return Number((await kv.get(key)) ?? 0) >= max;
+}
+async function recordFailure(kv: KVNamespace, key: string, windowSec: number) {
+  const n = Number((await kv.get(key)) ?? 0);
+  await kv.put(key, String(n + 1), { expirationTtl: windowSec });
+}
+
+async function startSession(env: Bindings, userId: string) {
+  const sid = crypto.randomUUID();
+  await env.KV.put(`sess:${sid}`, userId, { expirationTtl: SESSION_TTL });
+  return sign({ sub: userId, sid, exp: Math.floor(Date.now() / 1000) + SESSION_TTL }, env.JWT_SECRET);
+}
+
+app.post('/api/auth/register', async (c) => {
+  await ensureAuthSchema(c.env.DB);
+  const body = await c.req.json<{ email?: string; password?: string; display_name?: string }>().catch(() => null);
+  const email = normEmail(body?.email);
+  const password = String(body?.password ?? '');
+  const name = String(body?.display_name ?? '').trim().slice(0, 60) || null;
+
+  if (!EMAIL_RE.test(email)) return c.json({ error: 'invalid_email' }, 400);
+  if (password.length < 8 || password.length > 128) return c.json({ error: 'weak_password' }, 400);
+  if (isAdminEmail(c.env, email)) return c.json({ error: 'reserved_email' }, 403);
+
+  // limite por IP: 10 cadastros/hora
+  const ipKey = `rl:reg:${c.req.header('cf-connecting-ip') ?? 'unknown'}`;
+  if (await isLocked(c.env.KV, ipKey, 10)) return c.json({ error: 'too_many_attempts' }, 429);
+  await recordFailure(c.env.KV, ipKey, 3600);
+
+  if (await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first()) {
+    return c.json({ error: 'email_taken' }, 409);
+  }
+  const id = crypto.randomUUID();
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO users (id, email, display_name, password_hash, role) VALUES (?, ?, ?, ?, 'user')")
+      .bind(id, email, name, await hashPassword(password, iterations(c.env))),
+    c.env.DB.prepare('INSERT INTO user_prefs (user_id) VALUES (?)').bind(id),
+  ]);
+  return c.json({ ok: true, token: await startSession(c.env, id) }, 201);
 });
 
-app.post('/api/auth/verify', async (c) => {
-  const { token } = await c.req.json<{ token: string }>();
-  const key = `magic:${await sha256(token ?? '')}`;
-  const email = await c.env.KV.get(key);
-  if (!email) return c.json({ error: 'invalid_or_expired' }, 400);
-  await c.env.KV.delete(key); // uso único
+app.post('/api/auth/login', async (c) => {
+  await ensureAuthSchema(c.env.DB);
+  const body = await c.req.json<{ email?: string; password?: string }>().catch(() => null);
+  const email = normEmail(body?.email);
+  const password = String(body?.password ?? '');
+  if (!EMAIL_RE.test(email) || !password) return c.json({ error: 'invalid_credentials' }, 401);
 
-  let user = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first<{ id: string }>();
-  if (!user) {
-    const id = crypto.randomUUID();
-    await c.env.DB.batch([
-      c.env.DB.prepare('INSERT INTO users (id, email) VALUES (?, ?)').bind(id, email),
-      c.env.DB.prepare('INSERT INTO user_prefs (user_id) VALUES (?)').bind(id),
-    ]);
-    user = { id };
+  // 5 falhas / 15 min por e-mail e 20 por IP (rede compartilhada)
+  const keys = [`rl:login:${email}`, `rl:loginip:${c.req.header('cf-connecting-ip') ?? 'unknown'}`];
+  if (await isLocked(c.env.KV, keys[0], 5) || (await isLocked(c.env.KV, keys[1], 20))) return c.json({ error: 'too_many_attempts' }, 429);
+
+  let userId: string | null = null;
+  if (isAdminEmail(c.env, email)) {
+    // Admin: a senha vem do secret ADMIN_PASSWORD (fonte única); a conta é criada/promovida no primeiro login
+    if (c.env.ADMIN_PASSWORD && (await secretEquals(password, c.env.ADMIN_PASSWORD))) {
+      const u = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first<{ id: string }>();
+      if (u) {
+        userId = u.id;
+        await c.env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ?").bind(u.id).run();
+      } else {
+        userId = crypto.randomUUID();
+        await c.env.DB.batch([
+          c.env.DB.prepare("INSERT INTO users (id, email, display_name, role) VALUES (?, ?, 'Admin', 'admin')").bind(userId, email),
+          c.env.DB.prepare('INSERT INTO user_prefs (user_id) VALUES (?)').bind(userId),
+        ]);
+      }
+    }
+  } else {
+    const u = await c.env.DB.prepare('SELECT id, password_hash FROM users WHERE email = ?').bind(email).first<{ id: string; password_hash: string | null }>();
+    if (u?.password_hash && (await verifyPassword(password, u.password_hash))) userId = u.id;
   }
-  await c.env.DB.prepare('UPDATE users SET last_login_at = unixepoch() WHERE id = ?').bind(user.id).run();
 
-  const sid = crypto.randomUUID();
-  await c.env.KV.put(`sess:${sid}`, user.id, { expirationTtl: SESSION_TTL });
-  const jwt = await sign({ sub: user.id, sid, exp: Math.floor(Date.now() / 1000) + SESSION_TTL }, c.env.JWT_SECRET);
-  return c.json({ ok: true, token: jwt });
+  if (!userId) {
+    await Promise.all(keys.map((k) => recordFailure(c.env.KV, k, 900)));
+    return c.json({ error: 'invalid_credentials' }, 401);
+  }
+  await c.env.KV.delete(keys[0]);
+  await c.env.DB.prepare('UPDATE users SET last_login_at = unixepoch() WHERE id = ?').bind(userId).run();
+  return c.json({ ok: true, token: await startSession(c.env, userId) });
 });
 
 app.post('/api/auth/logout', requireAuth, async (c) => {
@@ -115,8 +196,22 @@ app.post('/api/auth/logout', requireAuth, async (c) => {
 });
 
 app.get('/api/me', requireAuth, async (c) => {
-  const u = await c.env.DB.prepare('SELECT id,email,display_name,timezone FROM users WHERE id = ?').bind(c.get('userId')).first();
+  const u = await c.env.DB.prepare('SELECT id,email,display_name,timezone,role FROM users WHERE id = ?').bind(c.get('userId')).first();
   return c.json(u);
+});
+
+// ───────────── ADMIN ─────────────
+const requireAdmin = async (c: any, next: any) => {
+  const u = (await c.env.DB.prepare('SELECT role FROM users WHERE id = ?').bind(c.get('userId')).first()) as { role: string } | null;
+  if (u?.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+  await next();
+};
+
+app.get('/api/admin/users', requireAuth, requireAdmin, async (c) => {
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, email, display_name, role, created_at, last_login_at FROM users ORDER BY created_at DESC LIMIT 200'
+  ).all();
+  return c.json(results);
 });
 
 // ───────────── CATÁLOGO ─────────────
@@ -297,9 +392,10 @@ async function broadcast(env: Bindings, topic: string, message: { title: string;
   }
 }
 
-async function syncCatalog(env: Bindings) {
-  // TODO: baixar warframe-items (GitHub raw / npm) e upsert em items/mods/arcanes/incarnon_perks/riven_dispositions
-  // Dica: processar em lotes de ≤100 statements por db.batch() e guardar o hash da versão no KV para pular se não mudou.
+async function syncCatalog(_env: Bindings) {
+  // O catálogo de itens/mods agora é ESTÁTICO: scripts/build-catalog.mjs gera apps/web/static/data/*.json
+  // (atualizado a cada deploy e toda semana pelo workflow). Mantido vazio de propósito: baixar ~6 MB de JSON
+  // dentro do Worker estouraria o limite de CPU do plano grátis.
 }
 
 async function checkModifiers(env: Bindings) {
@@ -337,7 +433,7 @@ compatibility_date = "2026-01-01"
 [[d1_databases]]   binding = "DB"  database_name = "warframe-db"  database_id = "..."
 [[kv_namespaces]]  binding = "KV"  id = "..."
 [triggers]         crons = ["0 0 * * 1", "0 *\/6 * * *"]
-Secrets: wrangler secret put JWT_SECRET | RESEND_API_KEY | VAPID_PRIVATE_KEY
+Secrets: wrangler secret put JWT_SECRET | VAPID_PRIVATE_KEY | ADMIN_EMAIL | ADMIN_PASSWORD
 Vars:    APP_URL, VAPID_PUBLIC_KEY, VAPID_SUBJECT
 Gerar VAPID: npx web-push generate-vapid-keys
 */
