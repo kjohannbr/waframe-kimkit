@@ -4,8 +4,8 @@
   import { base } from '$app/paths';
   import { api, ApiError, getToken, setToken } from '$lib/api';
   import { enablePush, disablePush, pushSupported } from '$lib/push';
-  import { Bell, BellOff } from '@lucide/svelte';
-  import { loadWorld, type World } from '$lib/world';
+  import { Bell, BellOff, RefreshCw } from '@lucide/svelte';
+  import { loadWorld, syncWorld, fmtDate, type World } from '$lib/world';
   import { TABS, TASK_CATEGORY, isTab, nextReset, type TabId } from '$lib/weekly';
   import Countdown from '$lib/Countdown.svelte';
   import DescendiaPanel from '$lib/DescendiaPanel.svelte';
@@ -32,6 +32,29 @@
   let tab = $state<TabId>('quadro');
   const reset = nextReset();
   const errors = $derived(world?.errors ?? {});
+
+  let syncing = $state(false);
+  let syncMsg = $state('');
+
+  /** Busca dados novos do jogo e recarrega o quadro (a semana pode ter virado). */
+  async function sync() {
+    if (syncing) return;
+    syncing = true;
+    syncMsg = '';
+    const w = await syncWorld();
+    if (w) {
+      world = w;
+      try {
+        const r = await api<{ period: string; tasks: Task[] }>('/api/tasks');
+        tasks = r.tasks ?? [];
+        period = r.period ?? '';
+      } catch { /* mantém o quadro atual */ }
+      syncMsg = w.stale.length ? `Sincronizado, mas ${w.stale.join(', ')} veio do cache.` : 'Tudo atualizado.';
+    } else {
+      syncMsg = 'Não foi possível sincronizar agora. Tente de novo em instantes.';
+    }
+    syncing = false;
+  }
 
   function pick(id: TabId) {
     tab = id;
@@ -98,9 +121,16 @@
   {#each TABS as t}
     <button role="tab" aria-selected={tab === t.id} onclick={() => pick(t.id)} class="rounded-lg px-3 py-1.5 text-sm {tab === t.id ? 'bg-amber-400 font-semibold text-zinc-900' : 'bg-zinc-800 hover:bg-zinc-700'}">{t.label}</button>
   {/each}
-  <span class="ml-auto"><Countdown to={reset} /></span>
+  <span class="ml-auto flex items-center gap-3">
+    {#if world}<span class="hidden text-xs text-zinc-500 sm:inline">Dados de {fmtDate(world.fetchedAt)}</span>{/if}
+    <Countdown to={reset} />
+    <button onclick={sync} disabled={syncing} data-testid="sync" class="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:border-amber-400 disabled:opacity-60">
+      <RefreshCw size={14} class={syncing ? 'animate-spin' : ''} /> {syncing ? 'Sincronizando…' : 'Sincronizar'}
+    </button>
+  </span>
 </div>
 
+{#if syncMsg}<p class="mb-4 text-sm text-zinc-400" role="status" data-testid="sync-msg">{syncMsg}</p>{/if}
 {#if !worldLoading && !world && tab !== 'quadro'}
   <p class="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200" data-testid="world-error">
     Não consegui buscar os dados ao vivo da semana (API fora do ar ou sem resposta). Os dados fixos continuam abaixo.

@@ -1,5 +1,5 @@
 // Tipos da resposta de GET /api/world (espelham apps/api/src/world.ts) + carregamento.
-import { API_URL } from './api';
+import { API_URL, api } from './api';
 
 export type ArchKind = 'deep' | 'temporal' | 'unknown';
 export type NRisk = { name: string; description: string; elite: boolean };
@@ -80,6 +80,16 @@ export async function loadWorld(): Promise<World | null> {
     if (!res.ok) return null;
     const data = (await res.json().catch(() => null)) as World | null;
     return data && typeof data === 'object' && data.week ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Botão "Sincronizar": pede ao servidor uma busca nova. Devolve `null` se falhar. */
+export async function syncWorld(): Promise<World | null> {
+  try {
+    const res = await api<World>('/api/world/sync', { method: 'POST' });
+    return res && res.week ? res : null;
   } catch {
     return null;
   }

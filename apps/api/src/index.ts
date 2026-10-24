@@ -324,9 +324,12 @@ app.post('/api/rivens/price', async (c) => {
 const WORLD_KEY = 'world:v1';
 const WORLD_FRESH_MS = 5 * 60_000; // dentro de 5 min devolve o cache sem chamar a API externa
 
+const WORLD_MIN_SYNC_MS = 30_000; // sincronização manual: no máximo 1 busca externa a cada 30 s (protege a API de terceiros)
+
 async function getWorld(env: Bindings, force = false): Promise<World> {
   const cached = await env.KV.get<World>(WORLD_KEY, 'json');
   const now = new Date();
+  if (force && cached && now.getTime() - Date.parse(cached.fetchedAt) < WORLD_MIN_SYNC_MS) force = false;
   if (!force && cached && now.getTime() - Date.parse(cached.fetchedAt) < WORLD_FRESH_MS && cached.week?.id === weekWindow(now).id) {
     return cached;
   }
@@ -338,6 +341,12 @@ async function getWorld(env: Bindings, force = false): Promise<World> {
 app.get('/api/world', async (c) => {
   const world = await getWorld(c.env);
   c.header('Cache-Control', 'public, max-age=60');
+  return c.json(world, hasAnyData(world) ? 200 : 502);
+});
+
+// Botão "Sincronizar": força nova busca (com limite de 30 s entre buscas externas)
+app.post('/api/world/sync', requireAuth, async (c) => {
+  const world = await getWorld(c.env, true);
   return c.json(world, hasAnyData(world) ? 200 : 502);
 });
 
