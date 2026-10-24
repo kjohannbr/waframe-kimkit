@@ -5,6 +5,13 @@
   import { api, ApiError, getToken, setToken } from '$lib/api';
   import { enablePush, disablePush, pushSupported } from '$lib/push';
   import { Bell, BellOff } from '@lucide/svelte';
+  import { loadWorld, type World } from '$lib/world';
+  import { TABS, TASK_CATEGORY, isTab, nextReset, type TabId } from '$lib/weekly';
+  import Countdown from '$lib/Countdown.svelte';
+  import DescendiaPanel from '$lib/DescendiaPanel.svelte';
+  import VendorsPanel from '$lib/VendorsPanel.svelte';
+  import RewardsPanel from '$lib/RewardsPanel.svelte';
+  import ArchimedeaPanel from '$lib/ArchimedeaPanel.svelte';
 
   type Status = 'todo' | 'doing' | 'done';
   type Task = { key: string; title: string; category: string; status: Status };
@@ -20,9 +27,22 @@
   let loading = $state(true);
   let pushOn = $state(false);
   let dragKey: string | null = null;
+  let world = $state<World | null>(null);
+  let worldLoading = $state(true);
+  let tab = $state<TabId>('quadro');
+  const reset = nextReset();
+  const errors = $derived(world?.errors ?? {});
+
+  function pick(id: TabId) {
+    tab = id;
+    history.replaceState(history.state, '', `#${id}`);
+  }
 
   onMount(async () => {
+    const h = location.hash.slice(1);
+    if (isTab(h)) tab = h;
     if (!getToken()) return void goto(`${base}/`);
+    loadWorld().then((w) => { world = w; worldLoading = false; });
     try {
       const r = await api<{ period: string; tasks: Task[] }>('/api/tasks');
       tasks = r.tasks ?? [];
@@ -74,7 +94,31 @@
   {/if}
 </div>
 
-{#if loading}
+<div class="mb-4 flex flex-wrap items-center gap-2" role="tablist">
+  {#each TABS as t}
+    <button role="tab" aria-selected={tab === t.id} onclick={() => pick(t.id)} class="rounded-lg px-3 py-1.5 text-sm {tab === t.id ? 'bg-amber-400 font-semibold text-zinc-900' : 'bg-zinc-800 hover:bg-zinc-700'}">{t.label}</button>
+  {/each}
+  <span class="ml-auto"><Countdown to={reset} /></span>
+</div>
+
+{#if !worldLoading && !world && tab !== 'quadro'}
+  <p class="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200" data-testid="world-error">
+    Não consegui buscar os dados ao vivo da semana (API fora do ar ou sem resposta). Os dados fixos continuam abaixo.
+  </p>
+{/if}
+{#if world && world.stale.length && tab !== 'quadro'}
+  <p class="mb-4 text-xs text-zinc-500">Alguns dados vieram do cache: {world.stale.join(', ')}.</p>
+{/if}
+
+{#if tab === 'descendia'}
+  <DescendiaPanel data={world?.descendia ?? null} error={errors.descendia} />
+{:else if tab === 'mercadores'}
+  <VendorsPanel baro={world?.baro ?? null} varzia={world?.varzia ?? null} steelPath={world?.steelPath ?? null} {errors} />
+{:else if tab === 'recompensas'}
+  <RewardsPanel circuit={world?.circuit ?? null} archon={world?.archon ?? null} nightwave={world?.nightwave ?? null} {reset} {errors} />
+{:else if tab === 'archimedea'}
+  <ArchimedeaPanel data={world?.archimedeas ?? null} error={errors.archimedeas} />
+{:else if loading}
   <p class="text-zinc-400">Carregando…</p>
 {:else}
   <div class="grid gap-4 md:grid-cols-3">
@@ -97,6 +141,13 @@
               class="cursor-grab rounded-lg border border-zinc-700 bg-zinc-800 p-3 text-sm active:cursor-grabbing"
             >
               <div class="font-medium">{t.title}</div>
+              {#if TASK_CATEGORY[t.category]}
+                {@const c = TASK_CATEGORY[t.category]}
+                <div class="mt-1 flex items-center gap-2 text-xs">
+                  <span class="rounded px-1.5 py-0.5 {c.color}">{c.label}</span>
+                  {#if c.tab}<button class="text-zinc-400 underline hover:text-amber-300" onclick={() => pick(c.tab as TabId)}>ver detalhes</button>{/if}
+                </div>
+              {/if}
               <div class="mt-2 flex gap-1 md:hidden">
                 {#each columns.filter((c) => c.id !== t.status) as c}
                   <button class="rounded bg-zinc-700 px-2 py-0.5 text-xs" onclick={() => move(t.key, c.id)}>→ {c.label}</button>

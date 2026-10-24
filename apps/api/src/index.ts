@@ -4,8 +4,11 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { buildPushPayload } from '@block65/webcrypto-web-push';
+import { DEFAULT_BASE, fetchWorld, hasAnyData, mergeStale, weekWindow, type World } from './world';
+import { ensureTaskTemplates } from './tasks';
 
 type Bindings = {
+  WORLDSTATE_URL?: string; // opcional: base da API de worldstate (padrão api.warframestat.us/pc); usado em testes
   DB: D1Database;
   KV: KVNamespace;
   JWT_SECRET: string;
@@ -37,10 +40,7 @@ async function sha256(s: string) {
 
 /** Período do reset semanal: o reset do Warframe ocorre toda segunda 00:00 UTC. */
 export function weekPeriodId(d = new Date()) {
-  const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  const dow = (monday.getUTCDay() + 6) % 7; // 0 = segunda
-  monday.setUTCDate(monday.getUTCDate() - dow);
-  return monday.toISOString().slice(0, 10); // ex: "2026-10-19"
+  return weekWindow(d).id; // ex: "2026-10-19"
 }
 
 const requireAuth = async (c: any, next: any) => {
@@ -320,8 +320,30 @@ app.post('/api/rivens/price', async (c) => {
   return c.json(out);
 });
 
+// ───────────── ESTADO DO MUNDO (Archimedeas, Descendia, mercadores…) ─────────────
+const WORLD_KEY = 'world:v1';
+const WORLD_FRESH_MS = 5 * 60_000; // dentro de 5 min devolve o cache sem chamar a API externa
+
+async function getWorld(env: Bindings, force = false): Promise<World> {
+  const cached = await env.KV.get<World>(WORLD_KEY, 'json');
+  const now = new Date();
+  if (!force && cached && now.getTime() - Date.parse(cached.fetchedAt) < WORLD_FRESH_MS && cached.week?.id === weekWindow(now).id) {
+    return cached;
+  }
+  const world = mergeStale(await fetchWorld(env.WORLDSTATE_URL || DEFAULT_BASE, fetch, now), cached, now);
+  if (hasAnyData(world)) await env.KV.put(WORLD_KEY, JSON.stringify(world), { expirationTtl: 6 * 3600 });
+  return world;
+}
+
+app.get('/api/world', async (c) => {
+  const world = await getWorld(c.env);
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json(world, hasAnyData(world) ? 200 : 502);
+});
+
 // ───────────── KANBAN DE RESETS ─────────────
 app.get('/api/tasks', requireAuth, async (c) => {
+  await ensureTaskTemplates(c.env.DB);
   const uid = c.get('userId'), period = weekPeriodId();
   const { results } = await c.env.DB.prepare(
     `SELECT t.key,t.title,t.category,t.cadence, COALESCE(u.status,'todo') AS status, u.note
@@ -399,16 +421,15 @@ async function syncCatalog(_env: Bindings) {
 }
 
 async function checkModifiers(env: Bindings) {
-  // Consulta api.warframestat.us (ex.: /pc/archimedeas ou /pc/deepArchimedea — confira o endpoint atual),
-  // calcula fingerprint dos modificadores e notifica só se mudou.
-  const res = await fetch('https://api.warframestat.us/pc/archimedeas');
-  if (!res.ok) return;
-  const fp = await sha256(JSON.stringify(await res.json()));
-  const period = weekPeriodId();
+  // Atualiza o cache do estado do mundo e notifica quando as Archimedeas ou a Descendia da semana mudam.
+  const world = await getWorld(env, true);
+  const ids = [world.archimedeas?.map((a) => a.id) ?? null, world.descendia?.id ?? null];
+  if (ids[0] === null && ids[1] === null) return; // API fora do ar: não notifica
+  const fp = await sha256(JSON.stringify(ids));
   const ins = await env.DB.prepare('INSERT OR IGNORE INTO notification_log (topic,period_id,fingerprint) VALUES (?,?,?)')
-    .bind('modifiers_update', period, fp).run();
+    .bind('modifiers_update', weekPeriodId(), fp).run();
   if (ins.meta.changes) {
-    await broadcast(env, 'modifiers_update', { title: 'Modificadores atualizados', body: 'Novos modificadores de Archimedea disponíveis.', url: '/dashboard' });
+    await broadcast(env, 'modifiers_update', { title: 'Novidades da semana', body: 'Archimedeas e Descendia atualizadas. Veja os modificadores.', url: 'dashboard' });
   }
 }
 

@@ -173,14 +173,24 @@ CREATE TABLE IF NOT EXISTS notification_log (
 );
 
 -- ───────────── SEED DO KANBAN ─────────────
-INSERT OR IGNORE INTO task_templates (key, title, category, cadence, sort_order) VALUES
- ('deep_archimedea',       'Deep Archimedea',            'archimedea', 'weekly',   10),
- ('elite_deep_archimedea', 'Elite Deep Archimedea',      'archimedea', 'weekly',   11),
- ('hex_holvania',          'Holovania / Conteúdos do Hex','hex',        'weekly',   20),
- ('netracells',            'Netracells',                 'netracells', 'weekly',   30),
- ('archon_hunt',           'Archon Hunt',                'archon',     'weekly',   31),
- ('circuit',               'The Circuit (Duviri)',       'duviri',     'weekly',   40),
- ('vendor_iron_wake',      'Iron Wake (Mercador)',       'vendor',     'weekly',   50),
- ('vendor_teshin',         'Teshin (Resgate de Steel Path)','vendor',  'weekly',   51),
- ('vendor_varzia',         'Varzia (Prime Resurgence)',  'vendor',     'weekly',   52),
- ('vendor_maroo',          'Maroo (Ayatan)',             'vendor',     'weekly',   53);
+-- (mesma lista de src/tasks.ts; o Worker também faz upsert dela no D1)
+INSERT INTO task_templates (key, title, category, cadence, sort_order) VALUES
+ ('deep_archimedea', 'Deep Archimedea', 'archimedea', 'weekly', 10),
+ ('elite_deep_archimedea', 'Elite Deep Archimedea', 'archimedea', 'weekly', 11),
+ ('temporal_archimedea', 'Temporal Archimedea (1999)', 'archimedea', 'weekly', 12),
+ ('elite_temporal_archimedea', 'Elite Temporal Archimedea', 'archimedea', 'weekly', 13),
+ ('descendia', 'The Descendia', 'descendia', 'weekly', 15),
+ ('descendia_steel_path', 'The Descendia (Steel Path)', 'descendia', 'weekly', 16),
+ ('hex_holvania', 'Höllvania / Conteúdos do Hex', 'hex', 'weekly', 20),
+ ('netracells', 'Netracells', 'netracells', 'weekly', 30),
+ ('archon_hunt', 'Archon Hunt', 'archon', 'weekly', 31),
+ ('kahl_garrison', 'Kahl''s Garrison (Break Narmer)', 'kahl', 'weekly', 32),
+ ('nightwave_weekly', 'Nightwave: atos semanais', 'nightwave', 'weekly', 35),
+ ('circuit', 'The Circuit (Duviri)', 'duviri', 'weekly', 40),
+ ('circuit_steel_path', 'The Circuit (Steel Path)', 'duviri', 'weekly', 41),
+ ('vendor_iron_wake', 'Iron Wake / Palladino (Riven Slivers)', 'vendor', 'weekly', 50),
+ ('vendor_teshin', 'Teshin (Steel Path Honors)', 'vendor', 'weekly', 51),
+ ('vendor_varzia', 'Varzia (Prime Resurgence)', 'vendor', 'weekly', 52),
+ ('vendor_maroo', 'Maroo (Ayatan Treasure Hunt)', 'vendor', 'weekly', 53),
+ ('vendor_acrithis', 'Acrithis (5 itens da semana)', 'vendor', 'weekly', 54)
+ON CONFLICT(key) DO UPDATE SET title=excluded.title, category=excluded.category, cadence=excluded.cadence, sort_order=excluded.sort_order;
